@@ -1,6 +1,7 @@
 use eframe::egui::{self, Button, Context, RichText, ViewportCommand};
 
 use crate::app::{App, Screen};
+use crate::project::MetronomeMode;
 
 pub fn show(ctx: &Context, app: &mut App) {
     egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
@@ -9,8 +10,17 @@ pub fn show(ctx: &Context, app: &mut App) {
             ui.label(RichText::new("lupe").size(22.0).strong());
 
             ui.menu_button("File", |ui| {
+                if ui.button("New").clicked() {
+                    let _ = app.stop_router();
+                    let _ = app.create_new_project();
+                    ui.close_menu();
+                }
                 if ui.button("Save").clicked() {
                     let _ = app.save_project();
+                    ui.close_menu();
+                }
+                if ui.button("Rename project").clicked() {
+                    app.open_rename_project_popup();
                     ui.close_menu();
                 }
                 if ui.button("Open project").clicked() {
@@ -47,28 +57,36 @@ pub fn show(ctx: &Context, app: &mut App) {
                 let _ = app.toggle_route();
             }
 
-            ui.horizontal(|ui| {
-                ui.label("Metronome");
-                if ui.small_button("<").clicked() {
-                    app.cycle_metronome_mode(-1);
+            let metronome_mode = app
+                .project
+                .as_ref()
+                .map(|project| project.metronome.mode)
+                .unwrap_or(MetronomeMode::Off);
+            let (metronome_fill, metronome_label) = match metronome_mode {
+                MetronomeMode::Off => (egui::Color32::from_rgb(72, 72, 78), "Metronome"),
+                MetronomeMode::Always => (egui::Color32::from_rgb(72, 108, 180), "Metronome"),
+                MetronomeMode::On => (egui::Color32::from_rgb(65, 120, 85), "Metronome"),
+            };
+            if ui.add(Button::new(metronome_label).fill(metronome_fill)).clicked() {
+                match metronome_mode {
+                    MetronomeMode::Off => app.cycle_metronome_mode(2),
+                    MetronomeMode::Always => app.cycle_metronome_mode(-1),
+                    MetronomeMode::On => app.cycle_metronome_mode(-1),
                 }
-                let label = app
-                    .project
-                    .as_ref()
-                    .map(|project| project.metronome.mode.label())
-                    .unwrap_or("Off");
-                ui.label(RichText::new(label).strong());
-                if ui.small_button(">").clicked() {
-                    app.cycle_metronome_mode(1);
-                }
-            });
+            }
 
-            if ui.button("Metronome settings").clicked() {
+            if ui.button("⚙").clicked() {
                 app.metronome_popup_open = true;
             }
 
             ui.separator();
+            if ui.small_button("<").clicked() {
+                app.jump_playhead_to_previous_anchor();
+            }
             ui.label(format!("Playhead {:.2}", app.playhead_beats));
+            if ui.small_button(">").clicked() {
+                app.jump_playhead_to_next_anchor();
+            }
             if let Some(beats_left) = app.pending_record_beats() {
                 ui.label(RichText::new(format!("Count-in {:.1}", beats_left)).italics());
             }

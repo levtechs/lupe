@@ -4,7 +4,7 @@ use crate::app::{App, ClipSelection};
 use crate::gui::util;
 use crate::project::{AudioClip, Track, TrackKind};
 
-pub const INDEX_WIDTH: f32 = 56.0;
+pub const INDEX_WIDTH: f32 = 118.0;
 pub const ROW_HEIGHT: f32 = 76.0;
 pub const BEAT_WIDTH: f32 = 48.0;
 
@@ -28,17 +28,17 @@ pub fn show(ui: &mut Ui, app: &mut App, track_index: usize, track: &Track, timel
     let index_rect = Rect::from_min_size(row_rect.min, Vec2::new(INDEX_WIDTH, row_rect.height()));
     ui.painter().rect_filled(index_rect, 8.0, accent.gamma_multiply(0.16));
     ui.painter().text(
-        index_rect.center_top() + egui::vec2(0.0, 12.0),
-        Align2::CENTER_TOP,
+        index_rect.left_top() + egui::vec2(10.0, 10.0),
+        Align2::LEFT_TOP,
         format!("{track_index}"),
-        FontId::proportional(20.0),
+        FontId::proportional(16.0),
         accent,
     );
     ui.painter().text(
-        index_rect.center_bottom() - egui::vec2(0.0, 24.0),
-        Align2::CENTER_BOTTOM,
-        track.kind.label(),
-        FontId::proportional(12.0),
+        index_rect.left_bottom() - egui::vec2(-10.0, 16.0),
+        Align2::LEFT_BOTTOM,
+        &track.name,
+        FontId::proportional(13.0),
         Color32::from_gray(210),
     );
 
@@ -118,7 +118,7 @@ fn draw_clip(
     color: crate::project::TrackColor,
 ) {
     let left = timeline_rect.left() + clip.start_beat * BEAT_WIDTH;
-    let width = clip.length_beats.max(0.25) * BEAT_WIDTH;
+    let width = clip.span_beats() * BEAT_WIDTH;
     let rect = Rect::from_min_size(
         egui::pos2(left + 4.0, timeline_rect.top() + 10.0),
         Vec2::new((width - 8.0).max(12.0), timeline_rect.height() - 20.0),

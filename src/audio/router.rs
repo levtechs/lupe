@@ -30,6 +30,7 @@ pub struct PlaybackClip {
     pub start_beat: f64,
     pub length_beats: f64,
     pub source_offset_beats: f64,
+    pub loop_count: f64,
     pub volume: f32,
     pub samples: Arc<[f32]>,
 }
@@ -933,6 +934,7 @@ struct ClipRuntime {
     start_beat: f64,
     length_beats: f64,
     source_offset_beats: f64,
+    loop_count: f64,
     volume: f32,
     samples: Arc<[f32]>,
 }
@@ -943,16 +945,19 @@ impl ClipRuntime {
             start_beat: clip.start_beat,
             length_beats: clip.length_beats,
             source_offset_beats: clip.source_offset_beats,
+            loop_count: clip.loop_count,
             volume: clip.volume,
             samples: clip.samples,
         }
     }
 
     fn sample_at(&mut self, playhead_beats: f64, playing: bool, bpm: f64, sample_rate: f64) -> f32 {
-        if !playing || playhead_beats < self.start_beat || playhead_beats >= self.start_beat + self.length_beats {
+        let span_beats = (self.length_beats.max(0.25) * self.loop_count.max(0.25)).max(0.25);
+        if !playing || playhead_beats < self.start_beat || playhead_beats >= self.start_beat + span_beats {
             return 0.0;
         }
-        let seconds = (self.source_offset_beats + (playhead_beats - self.start_beat)) * 60.0 / bpm.max(1.0);
+        let relative = (playhead_beats - self.start_beat).rem_euclid(self.length_beats.max(0.25));
+        let seconds = (self.source_offset_beats + relative) * 60.0 / bpm.max(1.0);
         let sample_index = (seconds * sample_rate).floor() as usize;
         self.samples.get(sample_index).copied().unwrap_or(0.0) * self.volume
     }

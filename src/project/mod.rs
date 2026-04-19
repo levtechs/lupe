@@ -166,13 +166,19 @@ pub struct AudioClip {
     pub title: String,
     #[serde(default)]
     pub source_offset_beats: f32,
+    #[serde(default = "default_loop_count")]
+    pub loop_count: f32,
     #[serde(default)]
     pub file_path: Option<String>,
 }
 
 impl AudioClip {
+    pub fn span_beats(&self) -> f32 {
+        (self.length_beats.max(0.25) * self.loop_count.max(0.25)).max(0.25)
+    }
+
     pub fn end_beat(&self) -> f32 {
-        self.start_beat + self.length_beats.max(0.25)
+        self.start_beat + self.span_beats()
     }
 }
 
@@ -382,7 +388,11 @@ impl Track {
 
     pub fn new_audio(number: usize, default_input: Option<&str>) -> Self {
         Self {
-            name: format!("Track {number}"),
+            name: if number <= 1 {
+                "Recording".to_string()
+            } else {
+                format!("Recording {number}")
+            },
             kind: TrackKind::Audio,
             color: TrackColor::Cyan,
             muted: false,
@@ -447,6 +457,34 @@ pub fn save_project(project: &mut Project) -> Result<()> {
     project.path = Some(path);
     project.dirty = false;
     Ok(())
+}
+
+pub fn project_name_available(current_path: Option<&Path>, name: &str) -> Result<bool> {
+    let candidate = projects_dir()?.join(default_file_name(name));
+    Ok(!candidate.exists() || current_path == Some(candidate.as_path()))
+}
+
+pub fn rename_project(project: &mut Project, new_name: &str) -> Result<()> {
+    let new_name = new_name.trim();
+    if new_name.is_empty() {
+        anyhow::bail!("project name cannot be empty");
+    }
+
+    let new_path = projects_dir()?.join(default_file_name(new_name));
+    if !project_name_available(project.path.as_deref(), new_name)? {
+        anyhow::bail!("project name is already in use");
+    }
+
+    if let Some(old_path) = project.path.as_ref() {
+        if old_path != &new_path && old_path.exists() {
+            fs::rename(old_path, &new_path)?;
+        }
+    }
+
+    project.name = new_name.to_string();
+    project.path = Some(new_path);
+    project.dirty = true;
+    save_project(project)
 }
 
 pub fn save_project_to(project: &Project, path: &Path) -> Result<()> {
@@ -625,6 +663,10 @@ pub fn load_project(path: &Path) -> Result<Project> {
 
 fn default_count_in_beats() -> u32 {
     4
+}
+
+fn default_loop_count() -> f32 {
+    1.0
 }
 
 fn load_project_name(path: &Path) -> Result<String> {

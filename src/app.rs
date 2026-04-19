@@ -63,6 +63,10 @@ pub struct App {
     pub(crate) input_popup_open: bool,
     pub(crate) pedal_settings_open: Option<usize>,
     pub(crate) pedalboard_ratio: f32,
+    pub(crate) reset_session_layout: bool,
+    pub(crate) rename_project_popup_open: bool,
+    pub(crate) rename_project_draft: String,
+    pub(crate) rename_project_error: Option<String>,
     pub(crate) pending_record: Option<PendingRecord>,
     pub(crate) active_recording: Option<ActiveRecording>,
     pub(crate) metronome_flash: f32,
@@ -98,6 +102,10 @@ impl App {
             input_popup_open: false,
             pedal_settings_open: None,
             pedalboard_ratio: 0.32,
+            reset_session_layout: false,
+            rename_project_popup_open: false,
+            rename_project_draft: String::new(),
+            rename_project_error: None,
             pending_record: None,
             active_recording: None,
             metronome_flash: 0.0,
@@ -223,6 +231,7 @@ impl App {
         self.selected_clip = None;
         self.playhead_beats = 0.0;
         self.screen = Screen::Session;
+        self.reset_session_layout = true;
         self.status = "Created a new project".to_string();
         self.recent_projects = project::list_recent_projects().unwrap_or_default();
         self.sync_router()?;
@@ -240,6 +249,7 @@ impl App {
         self.pending_record = None;
         self.active_recording = None;
         self.screen = Screen::Session;
+        self.reset_session_layout = true;
         self.repair_project_devices()?;
         self.status = format!("Opened {}", short_path(&path));
         Ok(())
@@ -254,6 +264,40 @@ impl App {
         self.status = format!("Saved {}", project.name);
         self.recent_projects = project::list_recent_projects().unwrap_or_default();
         Ok(())
+    }
+
+    pub(crate) fn open_rename_project_popup(&mut self) {
+        if let Some(project) = self.project.as_ref() {
+            self.rename_project_draft = project.name.clone();
+            self.rename_project_error = None;
+            self.rename_project_popup_open = true;
+        }
+    }
+
+    pub(crate) fn rename_project_name_available(&self) -> bool {
+        self.project
+            .as_ref()
+            .and_then(|project| project::project_name_available(project.path.as_deref(), &self.rename_project_draft).ok())
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn confirm_rename_project(&mut self) {
+        let result = match self.project.as_mut() {
+            Some(project) => project::rename_project(project, &self.rename_project_draft),
+            None => return,
+        };
+
+        match result {
+            Ok(()) => {
+                self.rename_project_popup_open = false;
+                self.rename_project_error = None;
+                self.status = format!("Renamed project to {}", self.rename_project_draft.trim());
+                self.recent_projects = project::list_recent_projects().unwrap_or_default();
+            }
+            Err(err) => {
+                self.rename_project_error = Some(format!("{err:#}"));
+            }
+        }
     }
 
     pub(crate) fn refresh_devices(&mut self) -> Result<()> {
@@ -434,6 +478,7 @@ impl App {
             source_track: recording.track_index,
             title,
             source_offset_beats: 0.0,
+            loop_count: 1.0,
             file_path,
         };
         if let Some(track) = self.project.as_mut().and_then(|project| project.tracks.get_mut(recording.track_index)) {
@@ -458,6 +503,23 @@ impl App {
     pub(crate) fn set_playhead(&mut self, beat: f32) {
         self.playhead_beats = beat.clamp(0.0, self.max_timeline_beats());
         let _ = self.sync_router();
+    }
+
+    pub(crate) fn jump_playhead_to_previous_anchor(&mut self) {
+        let target = match self.selected_clip_ref() {
+            Some(clip) if (self.playhead_beats - clip.start_beat).abs() > 0.01 => clip.start_beat,
+            _ => 0.0,
+        };
+        self.set_playhead(target);
+    }
+
+    pub(crate) fn jump_playhead_to_next_anchor(&mut self) {
+        let song_end = self.max_timeline_beats();
+        let target = match self.selected_clip_ref() {
+            Some(clip) if (self.playhead_beats - clip.end_beat()).abs() > 0.01 => clip.end_beat(),
+            _ => song_end,
+        };
+        self.set_playhead(target);
     }
 
     pub(crate) fn toggle_track_mute(&mut self, index: usize) {
@@ -687,6 +749,7 @@ impl App {
             project.metronome.mode = project.metronome.mode.step(delta);
             project.dirty = true;
         }
+        let _ = self.sync_router();
     }
 
     pub(crate) fn adjust_metronome_param(&mut self, index: usize, delta: i32) {
@@ -703,6 +766,7 @@ impl App {
             }
             project.dirty = true;
         }
+        let _ = self.sync_router();
     }
 
     pub(crate) fn add_pedal(&mut self, kind: PedalKind) -> Result<()> {
@@ -824,15 +888,17 @@ impl App {
             }
             let left_length = playhead - clip.start_beat;
             let right_length = clip.end_beat() - playhead;
-            track.clips[selection.clip_index].length_beats = left_length;
+            let source_length = clip.length_beats.max(0.25);
+            track.clips[selection.clip_index].loop_count = (left_length / source_length).max(0.25);
             track.clips.insert(
                 selection.clip_index + 1,
                 AudioClip {
                     start_beat: playhead,
-                    length_beats: right_length,
+                    length_beats: source_length,
                     source_track: selection.track_index,
                     title: format!("{} B", clip.title),
-                    source_offset_beats: clip.source_offset_beats + left_length,
+                    source_offset_beats: clip.source_offset_beats + (left_length % source_length),
+                    loop_count: (right_length / source_length).max(0.25),
                     file_path: clip.file_path.clone(),
                 },
             );
@@ -921,7 +987,22 @@ impl App {
             .and_then(|track| track.clips.get_mut(clip_index))
         {
             let end = if snap { end_beat.max(clip.start_beat + 0.25).round() } else { end_beat.max(clip.start_beat + 0.25) };
-            clip.length_beats = (end - clip.start_beat).max(0.25);
+            clip.loop_count = ((end - clip.start_beat) / clip.length_beats.max(0.25)).max(0.25);
+            self.mark_dirty();
+        }
+    }
+
+    pub(crate) fn set_selected_clip_loop_count(&mut self, loop_count: f32) {
+        let Some(selection) = self.selected_clip else {
+            return;
+        };
+        if let Some(clip) = self
+            .project
+            .as_mut()
+            .and_then(|project| project.tracks.get_mut(selection.track_index))
+            .and_then(|track| track.clips.get_mut(selection.clip_index))
+        {
+            clip.loop_count = loop_count.clamp(0.25, 64.0);
             self.mark_dirty();
         }
     }
@@ -937,6 +1018,7 @@ impl App {
             source_track: track_index,
             title: "Recording".to_string(),
             source_offset_beats: 0.0,
+            loop_count: 1.0,
             file_path: None,
         })
     }
@@ -1112,6 +1194,7 @@ impl App {
                         start_beat: clip.start_beat as f64,
                         length_beats: clip.length_beats as f64,
                         source_offset_beats: clip.source_offset_beats as f64,
+                        loop_count: clip.loop_count as f64,
                         volume: track.volume,
                         samples: Arc::from(samples),
                     });

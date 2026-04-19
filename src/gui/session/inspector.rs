@@ -127,6 +127,10 @@ pub fn show(ui: &mut Ui, app: &mut App) {
         ui.add_space(8.0);
         ui.label(RichText::new("Selected Chunk").strong());
         ui.label(format!("{}  {:.2} -> {:.2}", clip.title, clip.start_beat, clip.end_beat()));
+        let mut loop_count = clip.loop_count;
+        if ui.add(egui::DragValue::new(&mut loop_count).range(0.25..=64.0).speed(0.1).prefix("Loop ")).changed() {
+            app.set_selected_clip_loop_count(loop_count);
+        }
         if ui.button(RichText::new("Delete chunk").color(Color32::from_rgb(220, 118, 118))).clicked() {
             app.delete_selected_clip();
         }
