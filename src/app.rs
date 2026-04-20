@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
-use crate::audio::{self, EngineConfig, EngineHandle, PlaybackClip, PlaybackDrumTrack, PlaybackMetronome, PlaybackState};
+use crate::audio::{self, EngineConfig, EngineHandle, PlaybackClip, PlaybackDrumClip, PlaybackMetronome, PlaybackState};
 use crate::pedals::{PedalKind, PedalSpec};
 use crate::project::{self, AudioClip, DrumSequence, MetronomeMode, Project, ProjectSummary, Track, TrackKind};
 
@@ -37,6 +37,12 @@ pub(crate) struct ActiveRecording {
     pub start_beat: f32,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SequencerTarget {
+    New { track_index: usize },
+    Edit(ClipSelection),
+}
+
 pub struct App {
     pub(crate) screen: Screen,
     pub(crate) input_devices: Vec<String>,
@@ -60,6 +66,8 @@ pub struct App {
     pub(crate) transport_popup_open: bool,
     pub(crate) metronome_popup_open: bool,
     pub(crate) sequencer_popup_open: bool,
+    pub(crate) sequencer_target: Option<SequencerTarget>,
+    pub(crate) sequencer_draft: DrumSequence,
     pub(crate) input_popup_open: bool,
     pub(crate) pedal_settings_open: Option<usize>,
     pub(crate) pedalboard_ratio: f32,
@@ -99,6 +107,8 @@ impl App {
             transport_popup_open: false,
             metronome_popup_open: false,
             sequencer_popup_open: false,
+            sequencer_target: None,
+            sequencer_draft: DrumSequence::default(),
             input_popup_open: false,
             pedal_settings_open: None,
             pedalboard_ratio: 0.32,
@@ -479,6 +489,7 @@ impl App {
             title,
             source_offset_beats: 0.0,
             loop_count: 1.0,
+            drum_sequence: None,
             file_path,
         };
         if let Some(track) = self.project.as_mut().and_then(|project| project.tracks.get_mut(recording.track_index)) {
@@ -899,6 +910,7 @@ impl App {
                     title: format!("{} B", clip.title),
                     source_offset_beats: clip.source_offset_beats + (left_length % source_length),
                     loop_count: (right_length / source_length).max(0.25),
+                    drum_sequence: clip.drum_sequence.clone(),
                     file_path: clip.file_path.clone(),
                 },
             );
@@ -1019,6 +1031,7 @@ impl App {
             title: "Recording".to_string(),
             source_offset_beats: 0.0,
             loop_count: 1.0,
+            drum_sequence: None,
             file_path: None,
         })
     }
@@ -1037,40 +1050,116 @@ impl App {
                 .unwrap_or(false)
     }
 
+    pub(crate) fn begin_new_sequence_chunk(&mut self) {
+        let Some(track) = self.selected_track_ref() else {
+            return;
+        };
+        if track.kind != TrackKind::Drum {
+            return;
+        }
+        let beats = self.project.as_ref().map(|project| project.transport.beats_per_bar).unwrap_or(4);
+        let mut draft = DrumSequence::default();
+        draft.ensure_len(beats);
+        self.sequencer_draft = draft;
+        self.sequencer_target = Some(SequencerTarget::New {
+            track_index: self.selected_track,
+        });
+        self.sequencer_popup_open = true;
+    }
+
+    pub(crate) fn edit_selected_sequence_chunk(&mut self) {
+        let Some(selection) = self.selected_clip else {
+            return;
+        };
+        let Some(sequence) = self
+            .project
+            .as_ref()
+            .and_then(|project| project.tracks.get(selection.track_index))
+            .and_then(|track| track.clips.get(selection.clip_index))
+            .and_then(|clip| clip.drum_sequence.clone())
+        else {
+            return;
+        };
+        self.sequencer_draft = sequence;
+        self.sequencer_target = Some(SequencerTarget::Edit(selection));
+        self.sequencer_popup_open = true;
+    }
+
+    pub(crate) fn save_sequence_chunk(&mut self) {
+        let Some(target) = self.sequencer_target else {
+            return;
+        };
+        let beats_per_bar = self.project.as_ref().map(|project| project.transport.beats_per_bar).unwrap_or(4);
+        self.sequencer_draft.ensure_len(beats_per_bar);
+        let draft = self.sequencer_draft.clone();
+        let length_beats = draft.measures.max(1) as f32 * beats_per_bar as f32;
+
+        match target {
+            SequencerTarget::New { track_index } => {
+                if let Some(track) = self.project.as_mut().and_then(|project| project.tracks.get_mut(track_index)) {
+                    let count = track.clips.iter().filter(|clip| clip.is_drum_sequence()).count() + 1;
+                    track.clips.push(AudioClip {
+                        start_beat: self.playhead_beats,
+                        length_beats,
+                        source_track: track_index,
+                        title: format!("Pattern {count}"),
+                        source_offset_beats: 0.0,
+                        loop_count: 1.0,
+                        drum_sequence: Some(draft),
+                        file_path: None,
+                    });
+                    let clip_index = track.clips.len() - 1;
+                    self.selected_clip = Some(ClipSelection { track_index, clip_index });
+                    self.selected_track = track_index;
+                }
+            }
+            SequencerTarget::Edit(selection) => {
+                if let Some(clip) = self
+                    .project
+                    .as_mut()
+                    .and_then(|project| project.tracks.get_mut(selection.track_index))
+                    .and_then(|track| track.clips.get_mut(selection.clip_index))
+                {
+                    clip.drum_sequence = Some(draft);
+                    clip.length_beats = length_beats;
+                    self.selected_clip = Some(selection);
+                }
+            }
+        }
+
+        self.sequencer_popup_open = false;
+        self.sequencer_target = None;
+        self.mark_dirty();
+        let _ = self.sync_router();
+    }
+
+    pub(crate) fn cancel_sequence_chunk(&mut self) {
+        self.sequencer_popup_open = false;
+        self.sequencer_target = None;
+    }
+
     pub(crate) fn adjust_selected_sequence_measures(&mut self, delta: i32) {
         let beats = self.project.as_ref().map(|project| project.transport.beats_per_bar).unwrap_or(4);
-        if let Some(track) = self.selected_track_mut() {
-            track.sequencer.measures = (track.sequencer.measures as i32 + delta).clamp(1, 8) as u32;
-            track.sequencer.ensure_len(beats);
-            self.mark_dirty();
-        }
-        let _ = self.sync_router();
+        self.sequencer_draft.measures = (self.sequencer_draft.measures as i32 + delta).clamp(1, 8) as u32;
+        self.sequencer_draft.ensure_len(beats);
     }
 
     pub(crate) fn adjust_selected_sequence_subdivision(&mut self, delta: i32) {
         let beats = self.project.as_ref().map(|project| project.transport.beats_per_bar).unwrap_or(4);
-        if let Some(track) = self.selected_track_mut() {
-            track.sequencer.subdivision = track.sequencer.subdivision.step(delta);
-            track.sequencer.ensure_len(beats);
-            self.mark_dirty();
-        }
-        let _ = self.sync_router();
+        self.sequencer_draft.subdivision = self.sequencer_draft.subdivision.step(delta);
+        self.sequencer_draft.ensure_len(beats);
     }
 
     pub(crate) fn toggle_sequence_step(&mut self, lane_index: usize, step_index: usize) {
         let beats = self.project.as_ref().map(|project| project.transport.beats_per_bar).unwrap_or(4);
-        if let Some(track) = self.selected_track_mut() {
-            track.sequencer.ensure_len(beats);
-            if let Some(step) = track.sequencer.lanes.get_mut(lane_index).and_then(|lane| lane.steps.get_mut(step_index)) {
-                *step = !*step;
-                self.mark_dirty();
-            }
+        self.sequencer_draft.ensure_len(beats);
+        if let Some(step) = self.sequencer_draft.lanes.get_mut(lane_index).and_then(|lane| lane.steps.get_mut(step_index)) {
+            *step = !*step;
         }
-        let _ = self.sync_router();
     }
 
     pub(crate) fn sequence(&self) -> Option<&DrumSequence> {
-        self.selected_track_ref().map(|track| &track.sequencer)
+        self.sequencer_target.as_ref().map(|_| &self.sequencer_draft)
     }
 
     pub(crate) fn current_bar_beat(&self) -> usize {
@@ -1172,11 +1261,20 @@ impl App {
         let drums = project
             .tracks
             .iter()
-            .filter(|track| track.kind == TrackKind::Drum)
-            .map(|track| PlaybackDrumTrack {
-                active: !track.muted && (!soloed || track.solo),
-                volume: track.volume,
-                sequence: track.sequencer.clone(),
+            .enumerate()
+            .filter(|(_, track)| track.kind == TrackKind::Drum)
+            .flat_map(|(_, track)| {
+                track.clips.iter().filter_map(move |clip| {
+                    Some(PlaybackDrumClip {
+                        active: !track.muted && (!soloed || track.solo),
+                        start_beat: clip.start_beat as f64,
+                        length_beats: clip.length_beats as f64,
+                        source_offset_beats: clip.source_offset_beats as f64,
+                        loop_count: clip.loop_count as f64,
+                        volume: track.volume,
+                        sequence: clip.drum_sequence.clone()?,
+                    })
+                })
             })
             .collect();
 
@@ -1189,6 +1287,7 @@ impl App {
                 let Some(path) = clip.file_path.as_ref() else {
                     continue;
                 };
+                if clip.drum_sequence.is_none() {
                 if let Ok(samples) = load_wav_samples(path) {
                     clips.push(PlaybackClip {
                         start_beat: clip.start_beat as f64,
@@ -1198,6 +1297,7 @@ impl App {
                         volume: track.volume,
                         samples: Arc::from(samples),
                     });
+                }
                 }
             }
         }

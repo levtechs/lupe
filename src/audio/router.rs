@@ -19,8 +19,12 @@ pub struct Meters {
 }
 
 #[derive(Clone)]
-pub struct PlaybackDrumTrack {
+pub struct PlaybackDrumClip {
     pub active: bool,
+    pub start_beat: f64,
+    pub length_beats: f64,
+    pub source_offset_beats: f64,
+    pub loop_count: f64,
     pub volume: f32,
     pub sequence: DrumSequence,
 }
@@ -44,7 +48,7 @@ pub struct PlaybackState {
     pub loop_enabled: bool,
     pub loop_end_beats: f64,
     pub metronome: PlaybackMetronome,
-    pub drums: Vec<PlaybackDrumTrack>,
+    pub drums: Vec<PlaybackDrumClip>,
     pub clips: Vec<PlaybackClip>,
 }
 
@@ -660,7 +664,7 @@ struct PlaybackRuntime {
     bpm: f64,
     loop_enabled: bool,
     loop_end_beats: f64,
-    drums: Vec<DrumRuntimeTrack>,
+    drums: Vec<DrumRuntimeClip>,
     clips: Vec<ClipRuntime>,
     voices: Vec<DrumVoice>,
     metronome: MetronomeRuntime,
@@ -695,7 +699,7 @@ impl PlaybackRuntime {
             self.drums = playback
                 .drums
                 .iter()
-                .map(|track| DrumRuntimeTrack::new(track.active, track.volume, track.sequence.clone(), playback.beats_per_bar))
+                .map(|clip| DrumRuntimeClip::new(clip.clone(), playback.beats_per_bar))
                 .collect();
             self.clips = playback.clips.iter().cloned().map(ClipRuntime::new).collect();
             self.voices.clear();
@@ -867,22 +871,28 @@ impl MetronomeRuntime {
     }
 }
 
-struct DrumRuntimeTrack {
+struct DrumRuntimeClip {
     active: bool,
+    start_beat: f64,
+    length_beats: f64,
+    source_offset_beats: f64,
+    loop_count: f64,
     volume: f32,
     sequence: DrumSequence,
     beats_per_bar: u32,
-    last_step: Option<usize>,
 }
 
-impl DrumRuntimeTrack {
-    fn new(active: bool, volume: f32, sequence: DrumSequence, beats_per_bar: u32) -> Self {
+impl DrumRuntimeClip {
+    fn new(clip: PlaybackDrumClip, beats_per_bar: u32) -> Self {
         Self {
-            active,
-            volume,
-            sequence,
+            active: clip.active,
+            start_beat: clip.start_beat,
+            length_beats: clip.length_beats,
+            source_offset_beats: clip.source_offset_beats,
+            loop_count: clip.loop_count,
+            volume: clip.volume,
+            sequence: clip.sequence,
             beats_per_bar,
-            last_step: None,
         }
     }
 
@@ -897,33 +907,51 @@ impl DrumRuntimeTrack {
         if !self.active {
             return;
         }
-
-        let step_count = self.sequence.total_steps(self.beats_per_bar).max(1);
-        let steps_per_beat = self.sequence.subdivision.steps_per_beat() as f64;
-        let previous_step = (previous_beat * steps_per_beat).floor().max(0.0) as usize;
-        let next_step = (next_beat * steps_per_beat).floor().max(0.0) as usize;
-
         if loop_enabled && next_beat >= loop_end_beats {
-            self.trigger_range(previous_step.saturating_add(1), step_count.saturating_sub(1), out);
-            self.trigger_range(0, (next_beat - loop_end_beats).mul_add(steps_per_beat, 0.0).floor() as usize, out);
-            self.last_step = Some(0);
-        } else if Some(next_step) != self.last_step {
-            self.trigger_range(previous_step.saturating_add(1), next_step, out);
-            self.last_step = Some(next_step);
+            self.trigger_segment(previous_beat, loop_end_beats, out);
+            self.trigger_segment(0.0, next_beat - loop_end_beats, out);
+        } else {
+            self.trigger_segment(previous_beat, next_beat, out);
         }
     }
 
-    fn trigger_range(&self, start: usize, end: usize, out: &mut Vec<DrumVoice>) {
-        if end < start {
+    fn trigger_segment(&self, previous_beat: f64, next_beat: f64, out: &mut Vec<DrumVoice>) {
+        let base_length = self.length_beats.max(0.25);
+        let clip_end = self.start_beat + base_length * self.loop_count.max(0.25);
+        if next_beat <= self.start_beat || previous_beat >= clip_end {
             return;
         }
+
+        let step_count = self.sequence.total_steps(self.beats_per_bar).max(1) as i64;
+        let steps_per_beat = self.sequence.subdivision.steps_per_beat() as f64;
+        let start_cross = previous_beat < self.start_beat && next_beat >= self.start_beat;
+
+        if start_cross {
+            let first_step = ((self.source_offset_beats * steps_per_beat).floor() as i64).rem_euclid(step_count);
+            self.trigger_step(first_step as usize, out);
+        }
+
+        let clipped_prev = previous_beat.max(self.start_beat);
+        let clipped_next = next_beat.min(clip_end);
+        if clipped_next <= clipped_prev {
+            return;
+        }
+
+        let prev_relative = (self.source_offset_beats as f64 + (clipped_prev - self.start_beat)).rem_euclid(base_length);
+        let next_relative = (self.source_offset_beats as f64 + (clipped_next - self.start_beat)).rem_euclid(base_length);
+        let prev_step = (prev_relative * steps_per_beat).floor() as i64;
+        let next_step = (next_relative * steps_per_beat).floor() as i64;
+        if next_step != prev_step {
+            self.trigger_step(next_step.rem_euclid(step_count) as usize, out);
+        }
+    }
+
+    fn trigger_step(&self, normalized: usize, out: &mut Vec<DrumVoice>) {
         let total_steps = self.sequence.total_steps(self.beats_per_bar).max(1);
-        for step in start..=end {
-            let normalized = step % total_steps;
-            for (lane_index, lane) in self.sequence.lanes.iter().enumerate() {
-                if lane.steps.get(normalized).copied().unwrap_or(false) {
-                    out.push(DrumVoice::new(lane_index, lane, self.volume));
-                }
+        let normalized = normalized % total_steps;
+        for (lane_index, lane) in self.sequence.lanes.iter().enumerate() {
+            if lane.steps.get(normalized).copied().unwrap_or(false) {
+                out.push(DrumVoice::new(lane_index, lane, self.volume));
             }
         }
     }

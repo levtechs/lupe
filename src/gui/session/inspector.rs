@@ -45,8 +45,8 @@ pub fn show(ui: &mut Ui, app: &mut App) {
 
     ui.add_space(8.0);
     if track.kind == TrackKind::Drum {
-        if ui.button("Sequence").clicked() {
-            app.sequencer_popup_open = true;
+        if ui.button("Sequence chunks").clicked() {
+            app.begin_new_sequence_chunk();
         }
     } else {
         let record_active = app.selected_track_is_recording();
@@ -136,6 +136,9 @@ pub fn show(ui: &mut Ui, app: &mut App) {
         }
         if ui.button("Duplicate").clicked() {
             app.duplicate_selected_clip();
+        }
+        if clip.is_drum_sequence() && ui.button("Edit sequence").clicked() {
+            app.edit_selected_sequence_chunk();
         }
         if ui.button("Split at playhead").clicked() {
             app.split_selected_clip();

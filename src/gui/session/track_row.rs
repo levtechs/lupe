@@ -2,7 +2,7 @@ use eframe::egui::{self, Align2, Color32, FontId, Rect, Sense, Stroke, Ui, Vec2}
 
 use crate::app::{App, ClipSelection};
 use crate::gui::util;
-use crate::project::{AudioClip, Track, TrackKind};
+use crate::project::{AudioClip, Track};
 
 pub const INDEX_WIDTH: f32 = 118.0;
 pub const ROW_HEIGHT: f32 = 76.0;
@@ -77,34 +77,12 @@ fn draw_grid(ui: &Ui, app: &App, timeline_rect: Rect) {
 }
 
 fn draw_clips(ui: &Ui, app: &mut App, track_index: usize, track: &Track, timeline_rect: Rect) {
-    if track.kind == TrackKind::Drum {
-        draw_drum_region(ui, app, track, timeline_rect);
-    }
     for (clip_index, clip) in track.clips.iter().enumerate() {
         draw_clip(ui, app, track_index, clip_index, clip, timeline_rect, false, track.color);
     }
     if let Some(clip) = app.active_recording_preview(track_index) {
         draw_clip(ui, app, track_index, usize::MAX, &clip, timeline_rect, true, track.color);
     }
-}
-
-fn draw_drum_region(ui: &Ui, app: &App, track: &Track, timeline_rect: Rect) {
-    let beats_per_bar = app.project.as_ref().map(|project| project.transport.beats_per_bar).unwrap_or(4) as f32;
-    let width = (track.sequencer.measures.max(1) as f32 * beats_per_bar) * BEAT_WIDTH;
-    let rect = Rect::from_min_size(
-        egui::pos2(timeline_rect.left() + 4.0, timeline_rect.top() + 10.0),
-        Vec2::new((width - 8.0).max(18.0), timeline_rect.height() - 20.0),
-    );
-    let accent = util::track_accent(track.color);
-    ui.painter().rect_filled(rect, 8.0, accent.gamma_multiply(0.22));
-    ui.painter().rect_stroke(rect, 8.0, Stroke::new(1.2, accent));
-    ui.painter().text(
-        rect.left_center() + egui::vec2(10.0, 0.0),
-        Align2::LEFT_CENTER,
-        format!("Pattern  {} bars", track.sequencer.measures),
-        FontId::proportional(13.0),
-        Color32::WHITE,
-    );
 }
 
 fn draw_clip(
@@ -137,7 +115,7 @@ fn draw_clip(
     ui.painter().text(
         rect.left_center() + egui::vec2(10.0, 0.0),
         Align2::LEFT_CENTER,
-        &clip.title,
+        if clip.is_drum_sequence() { format!("{}  [seq]", clip.title) } else { clip.title.clone() },
         FontId::proportional(13.0),
         Color32::WHITE,
     );

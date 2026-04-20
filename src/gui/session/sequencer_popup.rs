@@ -69,7 +69,24 @@ pub fn show(ctx: &Context, app: &mut App) {
                     ui.add_space(4.0);
                 }
             });
+
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                let save_label = match app.sequencer_target {
+                    Some(crate::app::SequencerTarget::Edit(_)) => "Save chunk",
+                    _ => "Create chunk",
+                };
+                if ui.button(save_label).clicked() {
+                    app.save_sequence_chunk();
+                }
+                if ui.button("Cancel").clicked() {
+                    app.cancel_sequence_chunk();
+                }
+            });
         });
 
     app.sequencer_popup_open = open;
+    if !open {
+        app.cancel_sequence_chunk();
+    }
 }

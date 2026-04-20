@@ -169,10 +169,16 @@ pub struct AudioClip {
     #[serde(default = "default_loop_count")]
     pub loop_count: f32,
     #[serde(default)]
+    pub drum_sequence: Option<DrumSequence>,
+    #[serde(default)]
     pub file_path: Option<String>,
 }
 
 impl AudioClip {
+    pub fn is_drum_sequence(&self) -> bool {
+        self.drum_sequence.is_some()
+    }
+
     pub fn span_beats(&self) -> f32 {
         (self.length_beats.max(0.25) * self.loop_count.max(0.25)).max(0.25)
     }
@@ -350,11 +356,14 @@ impl Project {
             track.count_in_beats = track.count_in_beats.clamp(1, 8);
             if track.kind == TrackKind::Drum {
                 track.input_device = None;
-                track.sequencer.ensure_len(self.transport.beats_per_bar);
             }
             for clip in &mut track.clips {
                 clip.source_track = index;
                 clip.length_beats = clip.length_beats.max(0.25);
+                clip.loop_count = clip.loop_count.max(0.25);
+                if let Some(sequence) = &mut clip.drum_sequence {
+                    sequence.ensure_len(self.transport.beats_per_bar);
+                }
             }
         }
         self.transport.bpm = self.transport.bpm.clamp(40, 240);
