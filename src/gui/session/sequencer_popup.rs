@@ -34,30 +34,40 @@ pub fn show(ctx: &Context, app: &mut App) {
         app.sequencer_drag_paint_mode = None;
     }
 
-    let screen = ctx.input(|input| input.screen_rect().size());
+    let screen_rect = ctx.input(|input| input.screen_rect());
+    let screen = screen_rect.size();
     let max_width = (screen.x - 24.0).max(280.0).min(920.0);
-    let body_max_height = (screen.y - 160.0).clamp(220.0, 680.0);
-    let drawer_height = (body_max_height - 112.0).max(280.0);
+    let max_height = (screen.y - 24.0).max(320.0);
     let default_width = 760.0_f32.min(max_width);
+    let default_height = (screen.y * 0.68).clamp(420.0, 680.0).min(max_height);
+    let default_pos = egui::pos2(
+        screen_rect.center().x - default_width * 0.5,
+        screen_rect.center().y - default_height * 0.5,
+    );
     let min_width = 500.0_f32.min(max_width);
     let preview_step = app.current_sequencer_preview_step_index();
     let total_steps = sequence_step_count(&sequence, beats_per_bar);
 
     let mut open = true;
     egui::Window::new("Drum sequencer")
-        .id(egui::Id::new("drum_sequencer_v5"))
+        .id(egui::Id::new("drum_sequencer_v7"))
         .open(&mut open)
-        .default_width(default_width)
+        .default_pos(default_pos)
+        .default_size(egui::vec2(default_width, default_height))
         .min_width(min_width)
+        .min_height(320.0_f32.min(max_height))
         .max_width(max_width)
+        .max_height(max_height)
         .constrain(true)
-        .resizable([true, false])
+        .resizable(true)
         .frame(theme::panel_frame())
         .show(ctx, |ui| {
+            let body_height = ui.available_height().max(220.0);
+            let drawer_height = (body_height - 112.0).max(220.0);
             egui::ScrollArea::vertical()
                 .id_salt("sequencer_body")
-                .max_height(body_max_height)
-                .auto_shrink([false, true])
+                .max_height(body_height)
+                .auto_shrink([false, false])
                 .show(ui, |ui| {
                     show_toolbar(ui, app, &sequence, beats_per_bar, beat_unit);
                     ui.add_space(8.0);

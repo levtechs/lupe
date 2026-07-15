@@ -70,7 +70,7 @@ pub fn show(ctx: &Context, app: &mut App) {
         let rect = ui.max_rect();
         let total_height = rect.height();
         let splitter_height = 8.0;
-        let desired_top = 250.0;
+        let desired_top = (total_height * 0.36).clamp(300.0, 420.0);
         if app.reset_session_layout {
             let preferred_bottom = (total_height - desired_top - splitter_height).max(320.0);
             app.pedalboard_ratio = (preferred_bottom / total_height).clamp(0.15, 0.75);
@@ -139,15 +139,5 @@ pub fn show(ctx: &Context, app: &mut App) {
     metronome_popup::show(ctx, app);
     input_settings_popup::show(ctx, app);
     rename_project_popup::show(ctx, app);
-    if app.sequencer_popup_open {
-        let screen = ctx.input(|input| input.screen_rect());
-        egui::Area::new(egui::Id::new("sequencer_modal_backdrop"))
-            .order(egui::Order::Middle)
-            .fixed_pos(screen.min)
-            .show(ctx, |ui| {
-                let (rect, _) = ui.allocate_exact_size(screen.size(), egui::Sense::click_and_drag());
-                ui.painter().rect_filled(rect, 0.0, egui::Color32::from_black_alpha(28));
-            });
-    }
     sequencer_popup::show(ctx, app);
 }
