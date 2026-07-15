@@ -154,6 +154,10 @@ pub struct Track {
     pub count_in_beats: u32,
     #[serde(default)]
     pub sequencer: DrumSequence,
+    #[serde(default = "legacy_drum_humanize")]
+    pub drum_humanize: DrumHumanize,
+    #[serde(default)]
+    drum_humanize_migrated: bool,
     #[serde(default)]
     pub pedals: Vec<PedalSpec>,
 }
@@ -170,6 +174,8 @@ pub struct AudioClip {
     pub loop_count: f32,
     #[serde(default)]
     pub drum_sequence: Option<DrumSequence>,
+    #[serde(default = "default_clip_sample_rate")]
+    pub sample_rate_hz: u32,
     #[serde(default)]
     pub file_path: Option<String>,
 }
@@ -193,22 +199,75 @@ pub struct DrumSequence {
     pub measures: u32,
     pub subdivision: SequencerSubdivision,
     pub lanes: Vec<DrumLane>,
+    #[serde(default = "legacy_drum_humanize")]
+    pub humanize: DrumHumanize,
+}
+
+fn legacy_drum_humanize() -> DrumHumanize {
+    DrumHumanize {
+        timing_ms: 0.0,
+        velocity_variation: 0.0,
+        swing: 0.0,
+        feel_ms: 0.0,
+        seed: default_humanize_seed(),
+        evolving: false,
+    }
 }
 
 impl Default for DrumSequence {
     fn default() -> Self {
         Self {
             measures: 2,
-            subdivision: SequencerSubdivision::Quarter,
-            lanes: vec![
-                DrumLane::new("Kick"),
-                DrumLane::new("Snare"),
-                DrumLane::new("Closed Hat"),
-                DrumLane::new("Open Hat"),
-                DrumLane::new("Clap"),
-            ],
+            subdivision: SequencerSubdivision::Sixteenth,
+            lanes: Vec::new(),
+            humanize: legacy_drum_humanize(),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DrumHumanize {
+    #[serde(default = "default_humanize_timing")]
+    pub timing_ms: f32,
+    #[serde(default = "default_humanize_velocity")]
+    pub velocity_variation: f32,
+    #[serde(default)]
+    pub swing: f32,
+    #[serde(default)]
+    pub feel_ms: f32,
+    #[serde(default = "default_humanize_seed")]
+    pub seed: u64,
+    #[serde(default = "default_true")]
+    pub evolving: bool,
+}
+
+impl Default for DrumHumanize {
+    fn default() -> Self {
+        Self {
+            timing_ms: default_humanize_timing(),
+            velocity_variation: default_humanize_velocity(),
+            swing: 0.0,
+            feel_ms: 0.0,
+            seed: default_humanize_seed(),
+            evolving: true,
+        }
+    }
+}
+
+fn default_humanize_timing() -> f32 {
+    5.0
+}
+
+fn default_humanize_velocity() -> f32 {
+    0.06
+}
+
+fn default_humanize_seed() -> u64 {
+    0x4c55_5045
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -256,15 +315,165 @@ impl SequencerSubdivision {
 pub struct DrumLane {
     pub name: String,
     #[serde(default)]
+    pub sample_path: Option<String>,
+    #[serde(default)]
     pub steps: Vec<bool>,
+    #[serde(default)]
+    pub step_settings: Vec<DrumStepSettings>,
+    #[serde(default)]
+    pub role: DrumRole,
+    #[serde(default = "default_lane_gain")]
+    pub gain: f32,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default)]
+    pub sample_variants: Vec<String>,
 }
 
 impl DrumLane {
-    pub fn new(name: &str) -> Self {
+    pub fn new(name: &str, sample_path: Option<String>) -> Self {
         Self {
             name: name.to_string(),
+            sample_path,
             steps: Vec::new(),
+            step_settings: Vec::new(),
+            role: DrumRole::infer(name),
+            gain: 1.0,
+            muted: false,
+            sample_variants: Vec::new(),
         }
+    }
+
+    pub fn effective_role(&self) -> DrumRole {
+        if self.role == DrumRole::Other {
+            DrumRole::infer(&self.name)
+        } else {
+            self.role
+        }
+    }
+
+    pub fn setting(&self, step: usize) -> DrumStepSettings {
+        self.step_settings.get(step).copied().unwrap_or_default()
+    }
+
+    pub fn sample_paths(&self) -> impl Iterator<Item = &String> {
+        self.sample_path.iter().chain(self.sample_variants.iter())
+    }
+}
+
+fn default_lane_gain() -> f32 {
+    1.0
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct DrumStepSettings {
+    #[serde(default = "default_step_velocity")]
+    pub velocity: f32,
+    #[serde(default = "default_step_probability")]
+    pub probability: f32,
+    #[serde(default)]
+    pub offset_steps: f32,
+}
+
+impl Default for DrumStepSettings {
+    fn default() -> Self {
+        Self {
+            velocity: default_step_velocity(),
+            probability: default_step_probability(),
+            offset_steps: 0.0,
+        }
+    }
+}
+
+fn default_step_velocity() -> f32 {
+    1.0
+}
+
+fn default_step_probability() -> f32 {
+    1.0
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DrumRole {
+    Kick,
+    Snare,
+    ClosedHat,
+    OpenHat,
+    PedalHat,
+    HighTom,
+    MidTom,
+    FloorTom,
+    Ride,
+    Crash,
+    Percussion,
+    #[default]
+    Other,
+}
+
+impl DrumRole {
+    pub const ALL: [DrumRole; 12] = [
+        DrumRole::Kick,
+        DrumRole::Snare,
+        DrumRole::ClosedHat,
+        DrumRole::OpenHat,
+        DrumRole::PedalHat,
+        DrumRole::HighTom,
+        DrumRole::MidTom,
+        DrumRole::FloorTom,
+        DrumRole::Ride,
+        DrumRole::Crash,
+        DrumRole::Percussion,
+        DrumRole::Other,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Kick => "Kick",
+            Self::Snare => "Snare",
+            Self::ClosedHat => "Closed Hat",
+            Self::OpenHat => "Open Hat",
+            Self::PedalHat => "Pedal Hat",
+            Self::HighTom => "High Tom",
+            Self::MidTom => "Mid Tom",
+            Self::FloorTom => "Floor Tom",
+            Self::Ride => "Ride",
+            Self::Crash => "Crash",
+            Self::Percussion => "Percussion",
+            Self::Other => "Other",
+        }
+    }
+
+    pub fn infer(value: &str) -> Self {
+        let value = value.to_ascii_lowercase();
+        if value.contains("kick") || value.contains("bass drum") {
+            Self::Kick
+        } else if value.contains("snare") || value.contains("sidestick") || value.contains("rim") {
+            Self::Snare
+        } else if value.contains("open") && (value.contains("hat") || value.contains("hh")) {
+            Self::OpenHat
+        } else if value.contains("pedal") && value.contains("hat") {
+            Self::PedalHat
+        } else if value.contains("hat") || value.contains("hh") {
+            Self::ClosedHat
+        } else if value.contains("floor") || value.contains("low tom") {
+            Self::FloorTom
+        } else if value.contains("high tom") || value.contains("tom 1") {
+            Self::HighTom
+        } else if value.contains("tom") {
+            Self::MidTom
+        } else if value.contains("ride") {
+            Self::Ride
+        } else if value.contains("crash") || value.contains("cymbal") {
+            Self::Crash
+        } else if value.contains("clap") || value.contains("perc") || value.contains("cowbell") {
+            Self::Percussion
+        } else {
+            Self::Other
+        }
+    }
+
+    pub fn choke_group(self) -> Option<u8> {
+        matches!(self, Self::ClosedHat | Self::OpenHat | Self::PedalHat).then_some(1)
     }
 }
 
@@ -352,11 +561,29 @@ impl Project {
             self.tracks.push(Track::new_audio(1, input.as_deref()));
         }
         for (index, track) in self.tracks.iter_mut().enumerate() {
+            if !track.drum_humanize_migrated {
+                if track.drum_humanize == legacy_drum_humanize() {
+                    if let Some(previous) = track
+                        .clips
+                        .iter()
+                        .filter_map(|clip| clip.drum_sequence.as_ref())
+                        .map(|sequence| &sequence.humanize)
+                        .find(|humanize| **humanize != legacy_drum_humanize())
+                    {
+                        track.drum_humanize = previous.clone();
+                    }
+                }
+                track.drum_humanize_migrated = true;
+            }
             track.volume = track.volume.clamp(0.0, 1.0);
             track.count_in_beats = track.count_in_beats.clamp(1, 8);
             if track.kind == TrackKind::Drum {
                 track.input_device = None;
             }
+            track.drum_humanize.timing_ms = track.drum_humanize.timing_ms.clamp(0.0, 30.0);
+            track.drum_humanize.velocity_variation = track.drum_humanize.velocity_variation.clamp(0.0, 0.35);
+            track.drum_humanize.swing = track.drum_humanize.swing.clamp(0.0, 1.0);
+            track.drum_humanize.feel_ms = track.drum_humanize.feel_ms.clamp(-20.0, 20.0);
             for clip in &mut track.clips {
                 clip.source_track = index;
                 clip.length_beats = clip.length_beats.max(0.25);
@@ -391,6 +618,8 @@ impl Track {
             count_in_enabled: false,
             count_in_beats: default_count_in_beats(),
             sequencer: DrumSequence::default(),
+            drum_humanize: DrumHumanize::default(),
+            drum_humanize_migrated: true,
             pedals: Vec::new(),
         }
     }
@@ -414,6 +643,8 @@ impl Track {
             count_in_enabled: true,
             count_in_beats: default_count_in_beats(),
             sequencer: DrumSequence::default(),
+            drum_humanize: legacy_drum_humanize(),
+            drum_humanize_migrated: true,
             pedals: Vec::new(),
         }
     }
@@ -428,7 +659,21 @@ impl DrumSequence {
         let total_steps = self.total_steps(beats_per_bar);
         for lane in &mut self.lanes {
             lane.steps.resize(total_steps, false);
+            lane.step_settings.resize(total_steps, DrumStepSettings::default());
+            lane.gain = lane.gain.clamp(0.0, 2.0);
+            if lane.role == DrumRole::Other {
+                lane.role = DrumRole::infer(&lane.name);
+            }
+            for setting in &mut lane.step_settings {
+                setting.velocity = setting.velocity.clamp(0.0, 1.0);
+                setting.probability = setting.probability.clamp(0.0, 1.0);
+                setting.offset_steps = setting.offset_steps.clamp(-0.49, 0.49);
+            }
         }
+        self.humanize.timing_ms = self.humanize.timing_ms.clamp(0.0, 30.0);
+        self.humanize.velocity_variation = self.humanize.velocity_variation.clamp(0.0, 0.35);
+        self.humanize.swing = self.humanize.swing.clamp(0.0, 1.0);
+        self.humanize.feel_ms = self.humanize.feel_ms.clamp(-20.0, 20.0);
     }
 }
 
@@ -494,6 +739,23 @@ pub fn rename_project(project: &mut Project, new_name: &str) -> Result<()> {
     project.path = Some(new_path);
     project.dirty = true;
     save_project(project)
+}
+
+pub fn delete_project(project: &Project) -> Result<()> {
+    let Some(path) = project.path.as_ref() else {
+        return Ok(());
+    };
+
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+
+    let media_dir = media_dir_for_project_path(path);
+    if media_dir.exists() {
+        fs::remove_dir_all(media_dir)?;
+    }
+
+    Ok(())
 }
 
 pub fn save_project_to(project: &Project, path: &Path) -> Result<()> {
@@ -636,6 +898,8 @@ pub fn load_project(path: &Path) -> Result<Project> {
             count_in_enabled,
             count_in_beats: default_count_in_beats(),
             sequencer: DrumSequence::default(),
+            drum_humanize: legacy_drum_humanize(),
+            drum_humanize_migrated: true,
             pedals,
         });
     }
@@ -678,6 +942,10 @@ fn default_loop_count() -> f32 {
     1.0
 }
 
+fn default_clip_sample_rate() -> u32 {
+    44_100
+}
+
 fn load_project_name(path: &Path) -> Result<String> {
     let conn = Connection::open(path)?;
     Ok(load_meta(&conn, "name")?.unwrap_or_else(|| display_name_from_path(path)))
@@ -717,6 +985,10 @@ fn default_file_name(name: &str) -> String {
     format!("{}.{}", slug(name), PROJECT_EXT)
 }
 
+fn media_dir_for_project_path(path: &Path) -> PathBuf {
+    path.with_extension("media")
+}
+
 fn slug(name: &str) -> String {
     let mut out = String::new();
     let mut last_dash = false;
@@ -735,4 +1007,69 @@ fn slug(name: &str) -> String {
 
 fn bool_to_i64(value: bool) -> i64 {
     if value { 1 } else { 0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_boolean_sequence_loads_without_added_humanization() {
+        let json = r#"{
+            "measures": 1,
+            "subdivision": "Quarter",
+            "lanes": [{"name": "Kick", "steps": [true, false, false, false]}]
+        }"#;
+        let mut sequence: DrumSequence = serde_json::from_str(json).unwrap();
+        sequence.ensure_len(4);
+        assert_eq!(sequence.lanes[0].steps, [true, false, false, false]);
+        assert_eq!(sequence.lanes[0].step_settings.len(), 4);
+        assert_eq!(sequence.lanes[0].effective_role(), DrumRole::Kick);
+        assert_eq!(sequence.humanize.timing_ms, 0.0);
+        assert_eq!(sequence.humanize.velocity_variation, 0.0);
+        assert!(!sequence.humanize.evolving);
+    }
+
+    #[test]
+    fn expressive_settings_stay_aligned_with_steps() {
+        let mut sequence = DrumSequence::default();
+        sequence.measures = 1;
+        sequence.lanes.push(DrumLane::new("Snare", None));
+        sequence.ensure_len(4);
+        sequence.lanes[0].steps[4] = true;
+        sequence.lanes[0].step_settings[4].velocity = 0.42;
+        sequence.measures = 2;
+        sequence.ensure_len(4);
+        assert!(sequence.lanes[0].steps[4]);
+        assert_eq!(sequence.lanes[0].step_settings[4].velocity, 0.42);
+        assert_eq!(sequence.lanes[0].steps.len(), sequence.lanes[0].step_settings.len());
+    }
+
+    #[test]
+    fn sequence_humanization_migrates_to_legacy_drum_track() {
+        let mut project = Project::new_default("migration".to_string(), None, None);
+        let track = &mut project.tracks[0];
+        track.drum_humanize = legacy_drum_humanize();
+        track.drum_humanize_migrated = false;
+        let mut sequence = DrumSequence::default();
+        sequence.humanize.timing_ms = 12.0;
+        sequence.humanize.velocity_variation = 0.15;
+        track.clips.push(AudioClip {
+            start_beat: 0.0,
+            length_beats: 8.0,
+            source_track: 0,
+            title: "Pattern".to_string(),
+            source_offset_beats: 0.0,
+            loop_count: 1.0,
+            drum_sequence: Some(sequence),
+            sample_rate_hz: 44_100,
+            file_path: None,
+        });
+
+        project.ensure_invariants();
+
+        assert_eq!(project.tracks[0].drum_humanize.timing_ms, 12.0);
+        assert_eq!(project.tracks[0].drum_humanize.velocity_variation, 0.15);
+        assert!(project.tracks[0].drum_humanize_migrated);
+    }
 }

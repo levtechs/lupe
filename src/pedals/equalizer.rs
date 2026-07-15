@@ -106,6 +106,6 @@ impl EqualizerState {
         let high = input - self.mid_state;
         let mid = input - low - high;
 
-        (low * pedal.low_gain + mid * pedal.mid_gain + high * pedal.high_gain).clamp(-1.0, 1.0)
+        low * pedal.low_gain + mid * pedal.mid_gain + high * pedal.high_gain
     }
 }

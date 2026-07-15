@@ -227,7 +227,6 @@ enum RuntimePedal {
 }
 
 pub struct PedalChain {
-    version: u64,
     sample_rate: u32,
     pedals: Vec<RuntimePedal>,
 }
@@ -235,21 +234,26 @@ pub struct PedalChain {
 impl PedalChain {
     pub fn new(sample_rate: u32) -> Self {
         Self {
-            version: u64::MAX,
             sample_rate,
             pedals: Vec::new(),
         }
     }
 
-    pub fn sync(&mut self, specs: &[PedalSpec], version: u64) {
-        if self.version == version {
+    pub fn sync(&mut self, specs: &[PedalSpec]) {
+        let topology_matches = self.pedals.len() == specs.len()
+            && self
+                .pedals
+                .iter()
+                .zip(specs)
+                .all(|(runtime, spec)| runtime.kind() == spec.kind());
+        if topology_matches {
             return;
         }
 
         self.pedals = specs
             .iter()
             .map(|spec| match spec {
-                PedalSpec::Bassify(_) => RuntimePedal::Bassify(BassifyState::new()),
+                PedalSpec::Bassify(_) => RuntimePedal::Bassify(BassifyState::new(self.sample_rate)),
                 PedalSpec::Distortion(_) => RuntimePedal::Distortion(DistortionState::new()),
                 PedalSpec::Equalizer(_) => RuntimePedal::Equalizer(EqualizerState::new()),
                 PedalSpec::Fuzz(_) => RuntimePedal::Fuzz(FuzzState::new()),
@@ -257,18 +261,13 @@ impl PedalChain {
                 PedalSpec::Reverb(_) => RuntimePedal::Reverb(ReverbState::new(self.sample_rate)),
             })
             .collect();
-        self.version = version;
     }
 
     pub fn process(&mut self, input: f32, specs: &[PedalSpec]) -> f32 {
         let mut sample = input;
 
         for (runtime, spec) in self.pedals.iter_mut().zip(specs.iter()) {
-            if !spec.enabled() {
-                continue;
-            }
-
-            sample = match (runtime, spec) {
+            let processed = match (runtime, spec) {
                 (RuntimePedal::Bassify(runtime), PedalSpec::Bassify(pedal)) => runtime.process(sample, pedal),
                 (RuntimePedal::Distortion(runtime), PedalSpec::Distortion(pedal)) => runtime.process(sample, pedal),
                 (RuntimePedal::Equalizer(runtime), PedalSpec::Equalizer(pedal)) => runtime.process(sample, pedal),
@@ -277,8 +276,24 @@ impl PedalChain {
                 (RuntimePedal::Reverb(runtime), PedalSpec::Reverb(pedal)) => runtime.process(sample, pedal),
                 _ => sample,
             };
+            if spec.enabled() {
+                sample = processed;
+            }
         }
 
-        sample.clamp(-1.0, 1.0)
+        sample
+    }
+}
+
+impl RuntimePedal {
+    fn kind(&self) -> PedalKind {
+        match self {
+            Self::Bassify(_) => PedalKind::Bassify,
+            Self::Distortion(_) => PedalKind::Distortion,
+            Self::Equalizer(_) => PedalKind::Equalizer,
+            Self::Fuzz(_) => PedalKind::Fuzz,
+            Self::Phaser(_) => PedalKind::Phaser,
+            Self::Reverb(_) => PedalKind::Reverb,
+        }
     }
 }

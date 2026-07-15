@@ -1,6 +1,6 @@
 use eframe::egui::{self, Context};
 
-use crate::app::App;
+use crate::{app::App, gui::theme};
 
 pub fn show(ctx: &Context, app: &mut App) {
     if !app.transport_popup_open {
@@ -12,6 +12,7 @@ pub fn show(ctx: &Context, app: &mut App) {
         .open(&mut open)
         .resizable(false)
         .default_width(320.0)
+        .frame(theme::panel_frame())
         .show(ctx, |ui| {
             let Some(project) = app.project.as_ref() else {
                 return;
@@ -23,6 +24,8 @@ pub fn show(ctx: &Context, app: &mut App) {
             let loop_enabled = project.transport.loop_enabled;
             let loop_bars = project.transport.loop_bars;
 
+            ui.label(egui::RichText::new("LOOP").small().strong().color(theme::MUTED));
+            theme::card_frame().show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Loop bars");
                 if ui.small_button("-").clicked() {
@@ -38,8 +41,11 @@ pub fn show(ctx: &Context, app: &mut App) {
             if ui.checkbox(&mut loop_toggle, "Loop enabled").changed() {
                 app.toggle_loop_enabled();
             }
+            });
 
-            ui.separator();
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("TEMPO & METER").small().strong().color(theme::MUTED));
+            theme::card_frame().show(ui, |ui| {
 
             ui.horizontal(|ui| {
                 ui.label("BPM");
@@ -79,6 +85,7 @@ pub fn show(ctx: &Context, app: &mut App) {
                 if ui.small_button("+").clicked() {
                     app.adjust_beat_unit(1);
                 }
+            });
             });
         });
 

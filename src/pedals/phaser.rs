@@ -80,6 +80,6 @@ impl PhaserState {
         let stage2 = -a * stage1 + self.z2;
         self.z2 = stage1 + a * stage2;
 
-        (input * (1.0 - pedal.mix) + stage2 * pedal.mix).clamp(-1.0, 1.0)
+        input * (1.0 - pedal.mix) + stage2 * pedal.mix
     }
 }

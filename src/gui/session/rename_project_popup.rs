@@ -1,6 +1,6 @@
 use eframe::egui::{self, Context, RichText};
 
-use crate::app::App;
+use crate::{app::App, gui::theme};
 
 pub fn show(ctx: &Context, app: &mut App) {
     if !app.rename_project_popup_open {
@@ -12,9 +12,10 @@ pub fn show(ctx: &Context, app: &mut App) {
         .open(&mut open)
         .resizable(false)
         .default_width(340.0)
+        .frame(theme::panel_frame())
         .show(ctx, |ui| {
-            ui.label("Project name");
-            ui.text_edit_singleline(&mut app.rename_project_draft);
+            ui.label(RichText::new("PROJECT NAME").small().strong().color(theme::MUTED));
+            ui.add_sized([ui.available_width(), 28.0], egui::TextEdit::singleline(&mut app.rename_project_draft));
 
             let trimmed = app.rename_project_draft.trim();
             let available = !trimmed.is_empty() && app.rename_project_name_available();
@@ -26,19 +27,19 @@ pub fn show(ctx: &Context, app: &mut App) {
                 "Name already taken".to_string()
             };
             let availability_color = if available {
-                egui::Color32::from_rgb(90, 170, 110)
+                theme::SUCCESS
             } else {
-                egui::Color32::from_rgb(210, 120, 120)
+                theme::DANGER
             };
             ui.colored_label(availability_color, availability_text);
 
             if let Some(error) = &app.rename_project_error {
-                ui.label(RichText::new(error).color(egui::Color32::from_rgb(220, 118, 118)));
+                ui.label(RichText::new(error).color(theme::DANGER));
             }
 
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.add_enabled(available, egui::Button::new("Rename")).clicked() {
+                if ui.add_enabled(available, egui::Button::new("Rename").fill(theme::ACCENT.gamma_multiply(0.65))).clicked() {
                     app.confirm_rename_project();
                 }
                 if ui.button("Cancel").clicked() {

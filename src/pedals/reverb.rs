@@ -135,6 +135,6 @@ impl ReverbState {
         self.idx_c = (self.idx_c + 1) % self.buffer_c.len();
 
         let wet = (self.damp_a + self.damp_b + self.damp_c) * 0.2;
-        (input * (1.0 - pedal.mix) + wet * pedal.mix).clamp(-1.0, 1.0)
+        input * (1.0 - pedal.mix) + wet * pedal.mix
     }
 }
